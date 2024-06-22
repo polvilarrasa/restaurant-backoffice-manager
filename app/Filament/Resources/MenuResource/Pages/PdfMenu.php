@@ -2,15 +2,20 @@
 
 namespace App\Filament\Resources\MenuResource\Pages;
 
+use App\Enums\MenuHeaderType;
+use App\Enums\MenuSectionPosition;
 use App\Filament\Resources\MenuResource;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
 use Filament\Forms\Components\Component;
+use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Grid;
 use Filament\Forms\Components\Section;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\ViewField;
 use Filament\Forms\Form;
 use Filament\Forms;
+use Filament\Forms\Get;
 use Filament\Notifications\Notification;
 use Filament\Pages\Concerns\InteractsWithFormActions;
 use Filament\Resources\Pages\Concerns\InteractsWithRecord;
@@ -18,6 +23,8 @@ use Filament\Resources\Pages\Page;
 use Filament\Support\Enums\MaxWidth;
 use Filament\Support\Exceptions\Halt;
 
+use Illuminate\Support\Facades\File;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use function Filament\authorize;
 
 /**
@@ -57,7 +64,17 @@ class PdfMenu extends Page
         try {
             $data = $this->form->getState();
 
+            $shouldDeleteOldLogo = false;
+            if ($this->record->header_type == MenuHeaderType::Logo) {
+                $shouldDeleteOldLogo = true;
+                $oldLogoPath = public_path('filament/' . $this->record->header_content);
+            }
+
             $this->record->update($data);
+
+            if ($shouldDeleteOldLogo && File::exists($oldLogoPath)) {
+                File::delete($oldLogoPath);
+            }
 
         } catch (Halt $exception) {
             return;
@@ -97,12 +114,56 @@ class PdfMenu extends Page
             ->schema([
                 Grid::make(1)
                     ->schema([
-                        Forms\Components\TextInput::make('name')
-                            ->required()
-                            ->maxLength(255),
-                        Forms\Components\TextInput::make('file_name')
-                            ->required()
-                            ->maxLength(255),
+                        Grid::make(2)
+                            ->schema([
+                                Forms\Components\TextInput::make('name')
+                                    ->required()
+                                    ->maxLength(255),
+                                Forms\Components\TextInput::make('file_name')
+                                    ->required()
+                                    ->maxLength(255),
+                            ]),
+                        Grid::make(2)
+                            ->schema([
+                                Forms\Components\Select::make('header_type')
+                                    ->options(MenuHeaderType::class)
+                                    ->live()
+                                    ->afterStateUpdated(fn (Select $component) => $component
+                                        ->getContainer()
+                                        ->getComponent('dynamicHeaderContentField')
+                                        ->getChildComponentContainer()
+                                        ->fill()),
+                                Forms\Components\Select::make('header_position')
+                                    ->live()
+                                    ->options(MenuSectionPosition::class),
+                                Grid::make(1)
+                                    ->schema(fn (Get $get): array => match (MenuHeaderType::tryFrom($get('header_type'))) {
+                                        MenuHeaderType::Text => [
+                                            Forms\Components\TextInput::make('header_content')->maxLength(255),
+                                        ],
+                                        MenuHeaderType::Logo => [
+                                            FileUpload::make('header_content')
+                                                ->openable()
+                                                ->maxSize(1024)
+                                                ->visibility('public')
+                                                ->disk('filament')
+                                                ->directory('images/menu_logos')
+                                                ->imageResizeMode('contain')
+                                                ->imageCropAspectRatio('3:2')
+                                                ->panelAspectRatio('3:2')
+                                                ->panelLayout('integrated')
+                                                ->removeUploadedFileButtonPosition('center bottom')
+                                                ->uploadButtonPosition('center bottom')
+                                                ->uploadProgressIndicatorPosition('center bottom')
+                                                ->extraAttributes([
+                                                    'class' => 'aspect-[3/2] w-[9.375rem] max-w-full',
+                                                ])
+                                                ->acceptedFileTypes(['image/png', 'image/jpeg', 'image/gif']),
+                                        ],
+                                        default => [],
+                                    })
+                                    ->key('dynamicHeaderContentField'),
+                            ]),
                         Forms\Components\Repeater::make('sections')
                             ->relationship('sections')
                             ->collapsible()
@@ -125,6 +186,7 @@ class PdfMenu extends Page
                             ->columnSpan(2)
                             ->hiddenLabel()
                             ->view('filament.components.pdf')
+                            ->live()
                     ])->columnSpan(2),
             ])->columns(3);
     }
